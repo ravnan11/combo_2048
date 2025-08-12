@@ -1,4 +1,4 @@
-import 'package:combo_2048/grid-peoperties.dart';
+import 'package:combo_2048/theme/grid-peoperties.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 
