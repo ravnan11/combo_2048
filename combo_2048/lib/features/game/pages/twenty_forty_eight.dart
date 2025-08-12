@@ -1,8 +1,9 @@
-// lib/features/game/pages/twenty_forty_eight.dart
 import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:combo_2048/core/helper/ads_helper.dart';
+import 'package:combo_2048/features/game/widgets/chaos_types.dart';
+import 'package:combo_2048/features/game/widgets/how_it_works_sheet.dart';
 import 'package:combo_2048/features/game/widgets/top_bar.dart';
 import 'package:combo_2048/features/logic/game_logic.dart';
 import 'package:combo_2048/theme/app_theme.dart';
@@ -56,8 +57,12 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
   InterstitialAd? _interstitial;
   int _undosSinceAd = 0;
 
-  // Spawns (clássico 2048): 90% sai 2, 10% sai 4
+  // Spawns (clássico): 90% sai 2, 10% sai 4
   int _spawnValue() => _rng.nextDouble() < 0.9 ? 2 : 4;
+
+  // ---------------- MODO CAOS ----------------
+  int _validSwipes = 0;
+  ChaosState? _activeChaos;
 
   // ---- Ads ----
   void _loadMrec() {
@@ -145,7 +150,6 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
 
   bool _canShowMrec(BuildContext context) {
     final size = MediaQuery.of(context).size;
-    // exige largura mínima para caber 300dp sem cortar e uma altura decente
     return size.width >= 320 && size.height >= 640 && _mrecLoaded && _mrec != null;
   }
 
@@ -155,10 +159,8 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
     final scheme = Theme.of(context).colorScheme;
     final game = Theme.of(context).extension<GameColors>()!;
 
-    // padding levemente adaptativo: reduz em telas bem estreitas
     final screenW = MediaQuery.of(context).size.width;
     final contentPadding = screenW < 360 ? 12.0 : 16.0;
-    const borderSize = 4.0;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -175,10 +177,11 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
                 onHelp: () => _showHowItWorks(context),
                 primary: scheme.primary,
                 score: _score,
+                chaosLabel: chaosLabel(_activeChaos),
+                chaosMovesLeft: _activeChaos?.movesLeft,
               ),
               const SizedBox(height: 12),
 
-              // MREC responsivo: só exibe se couber
               if (_canShowMrec(context))
                 Center(
                   child: SizedBox(
@@ -189,28 +192,70 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
                 ),
               if (_canShowMrec(context)) const SizedBox(height: 12),
 
-              // --- Área do tabuleiro: sempre quadrado e ajustado ao espaço restante ---
+              // Tabuleiro responsivo (lado = min(largura, altura disponível))
               Expanded(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    // calcula o lado do quadrado com base no espaço DISPONÍVEL
+                    const borderSize = 4.0;
                     final side = math.min(constraints.maxWidth, constraints.maxHeight);
+                    final tileSize = (side - borderSize * 2) / 4;
+
+                    final stackItems = <Widget>[
+                      ...gridTiles.map(
+                        (t) => TileWidget(
+                          x: tileSize * t.x,
+                          y: tileSize * t.y,
+                          containerSize: tileSize,
+                          size: tileSize - borderSize * 2,
+                          color: game.tileEmpty,
+                        ),
+                      ),
+                      ...[gridTiles, toAdd]
+                          .expand((e) => e)
+                          .map(
+                            (tile) => AnimatedBuilder(
+                              animation: controller,
+                              builder: (context, _) {
+                                final v = tile.animatedValue.value;
+                                if (v == 0) return const SizedBox();
+                                return TileWidget(
+                                  x: tileSize * tile.animatedX.value,
+                                  y: tileSize * tile.animatedY.value,
+                                  containerSize: tileSize,
+                                  size: (tileSize - borderSize * 2) * tile.size.value,
+                                  color: game.colorFor(v),
+                                  child: Center(
+                                    child: DefaultTextStyle(
+                                      style: Theme.of(context).textTheme.headlineMedium!.copyWith(color: game.textPrimary),
+                                      child: TileNumber(v),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                    ];
 
                     return Center(
                       child: SizedBox(
                         width: side,
                         height: side,
-                        child: _Board(
-                          side: side,
-                          borderSize: borderSize,
-                          game: game,
-                          controller: controller,
-                          gridTiles: gridTiles,
-                          allTiles: [gridTiles, toAdd].expand((e) => e),
-                          onSwipeUp: () => merge(SwipeDirection.up),
-                          onSwipeDown: () => merge(SwipeDirection.down),
-                          onSwipeLeft: () => merge(SwipeDirection.left),
-                          onSwipeRight: () => merge(SwipeDirection.right),
+                        child: Swiper(
+                          up: () => merge(SwipeDirection.up),
+                          down: () => merge(SwipeDirection.down),
+                          left: () => merge(SwipeDirection.left),
+                          right: () => merge(SwipeDirection.right),
+                          child: Container(
+                            height: side,
+                            width: side,
+                            padding: const EdgeInsets.all(borderSize),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              color: game.boardBg,
+                              border: Border.all(color: game.boardBorder, width: 2),
+                            ),
+                            child: Stack(children: stackItems),
+                          ),
                         ),
                       ),
                     );
@@ -224,11 +269,14 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
     );
   }
 
-  // ======== LÓGICA do fluxo (spawns/undo/score) ========
+  // ======== Fluxo do jogo (spawns/undo/score + CAOS) ========
 
   void setupNewGame() {
     setState(() {
       _score = 0;
+      _validSwipes = 0;
+      _activeChaos = null;
+
       gameStates.clear();
       for (final t in gridTiles) {
         t.value = 0;
@@ -247,9 +295,36 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
     }
   }
 
+  void _maybeActivateChaos() {
+    if (_activeChaos != null) return;
+    _validSwipes++;
+    if (_validSwipes < 10) return;
+
+    _validSwipes = 0;
+    final next = drawChaos(_rng);
+    // efeitos instantâneos: embaralha e consome
+    if (applyInstantChaosIfAny(state: next, tiles: gridTiles, rng: _rng, onAfterApply: () => controller.forward(from: 0))) {
+      setState(() {}); // atualiza UI (p.ex. score) se necessário
+      return;
+    }
+    _activeChaos = next;
+    setState(() {});
+  }
+
+  void _tickChaos() {
+    final c = _activeChaos;
+    if (c == null) return;
+    if (c.type == ChaosType.shuffleOnce) return; // já consumido
+    c.movesLeft--;
+    if (c.movesLeft <= 0) _activeChaos = null;
+  }
+
   void merge(SwipeDirection direction) {
+    // aplica caos de controle invertido
+    final dir = maybeMirror(direction, _activeChaos);
+
     bool Function() mergeFn;
-    switch (direction) {
+    switch (dir) {
       case SwipeDirection.up:
         mergeFn = mergeUp;
         break;
@@ -267,11 +342,16 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
     final gridBeforeSwipe = grid.map((row) => row.map((tile) => tile.copy()).toList()).toList();
 
     setState(() {
-      _pendingScore = 0; // zera pontos do movimento
+      _pendingScore = 0;
+
       if (mergeFn()) {
-        _score += _pendingScore; // aplica pontos acumulados
+        _score += _pendingScore;
         gameStates.add(GameState(gridBeforeSwipe, direction));
-        addNewTiles([_spawnValue()]);
+
+        _maybeActivateChaos();
+        _tickChaos();
+
+        addNewTiles(spawnForThisMove(_activeChaos, _spawnValue));
         controller.forward(from: 0);
       }
     });
@@ -312,7 +392,7 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
     });
   }
 
-  // ======== UI: Tutorial “Como funciona” (scrollável) ========
+  // ======== UI: Tutorial (usa widget separado) ========
 
   void _showHowItWorks(BuildContext context) {
     final maxH = MediaQuery.of(context).size.height * 0.85;
@@ -324,164 +404,8 @@ class TwentyFortyEightState extends State<TwentyFortyEight> with SingleTickerPro
       backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (_) {
-        return ConstrainedBox(constraints: BoxConstraints(maxHeight: maxH), child: const _HowItWorksSheet());
+        return ConstrainedBox(constraints: BoxConstraints(maxHeight: maxH), child: const HowItWorksSheet());
       },
-    );
-  }
-}
-
-// ----------------- Board isolado (usa o 'side' calculado) -----------------
-
-class _Board extends StatelessWidget {
-  final double side;
-  final double borderSize;
-  final GameColors game;
-  final AnimationController controller;
-  final Iterable<Tile> gridTiles;
-  final Iterable<Tile> allTiles;
-  final VoidCallback onSwipeUp;
-  final VoidCallback onSwipeDown;
-  final VoidCallback onSwipeLeft;
-  final VoidCallback onSwipeRight;
-
-  const _Board({
-    required this.side,
-    required this.borderSize,
-    required this.game,
-    required this.controller,
-    required this.gridTiles,
-    required this.allTiles,
-    required this.onSwipeUp,
-    required this.onSwipeDown,
-    required this.onSwipeLeft,
-    required this.onSwipeRight,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final tileSize = (side - borderSize * 2) / 4;
-
-    final stackItems = <Widget>[
-      // casas vazias do tabuleiro
-      ...gridTiles.map(
-        (t) => TileWidget(x: tileSize * t.x, y: tileSize * t.y, containerSize: tileSize, size: tileSize - borderSize * 2, color: game.tileEmpty),
-      ),
-      // tiles animados
-      ...allTiles.map(
-        (tile) => AnimatedBuilder(
-          animation: controller,
-          builder: (context, _) {
-            final v = tile.animatedValue.value;
-            if (v == 0) return const SizedBox();
-            return TileWidget(
-              x: tileSize * tile.animatedX.value,
-              y: tileSize * tile.animatedY.value,
-              containerSize: tileSize,
-              size: (tileSize - borderSize * 2) * tile.size.value,
-              color: game.colorFor(v),
-              child: Center(
-                child: DefaultTextStyle(style: Theme.of(context).textTheme.headlineMedium!.copyWith(color: game.textPrimary), child: TileNumber(v)),
-              ),
-            );
-          },
-        ),
-      ),
-    ];
-
-    return Swiper(
-      up: onSwipeUp,
-      down: onSwipeDown,
-      left: onSwipeLeft,
-      right: onSwipeRight,
-      child: Container(
-        height: side,
-        width: side,
-        padding: EdgeInsets.all(borderSize),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          color: game.boardBg,
-          border: Border.all(color: game.boardBorder, width: 2),
-        ),
-        child: Stack(children: stackItems),
-      ),
-    );
-  }
-}
-
-// ======== Sheet: Como funciona (Regra clássica) ========
-
-class _HowItWorksSheet extends StatelessWidget {
-  const _HowItWorksSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final scheme = Theme.of(context).colorScheme;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Como funciona', style: text.titleLarge),
-          const SizedBox(height: 8),
-          Text(
-            'Deslize para mover os tiles. Quando dois tiles de MESMO número se encontram, '
-            'eles se fundem e viram a soma.\nEx.: 2 + 2 = 4, 4 + 4 = 8, 8 + 8 = 16...',
-            style: text.bodyMedium,
-          ),
-          const SizedBox(height: 16),
-          Text('Exemplos', style: text.titleMedium),
-          const SizedBox(height: 8),
-          const _ExampleRow(examples: ['2 + 2 = 4', '4 + 4 = 8', '8 + 8 = 16']),
-          const SizedBox(height: 12),
-          Text('Não funde', style: text.titleMedium),
-          const SizedBox(height: 8),
-          const _ExampleRow(examples: ['2 + 4 ✗', '4 + 8 ✗', '8 + 16 ✗']),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: scheme.secondaryContainer,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: scheme.outlineVariant),
-            ),
-            child: Text(
-              'Após cada movimento válido nasce um novo tile (normalmente 2, às vezes 4).\n'
-              'Pontuação: cada fusão soma o valor do tile resultante ao seu Score.',
-              style: text.bodySmall,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ExampleRow extends StatelessWidget {
-  final List<String> examples;
-  const _ExampleRow({required this.examples});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children:
-          examples
-              .map(
-                (e) => Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: scheme.secondaryContainer,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: scheme.outlineVariant),
-                  ),
-                  child: Text(e),
-                ),
-              )
-              .toList(),
     );
   }
 }

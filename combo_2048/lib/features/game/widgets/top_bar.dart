@@ -8,6 +8,10 @@ class TopBar extends StatelessWidget {
   final Color primary;
   final int score;
 
+  // --- NOVO: caos opcional ---
+  final String? chaosLabel; // ex.: "Controles Invertidos"
+  final int? chaosMovesLeft; // ex.: 7 (jogadas restantes)
+
   const TopBar({
     super.key,
     required this.onRestart,
@@ -16,6 +20,8 @@ class TopBar extends StatelessWidget {
     required this.onHelp,
     required this.primary,
     required this.score,
+    this.chaosLabel,
+    this.chaosMovesLeft,
   });
 
   @override
@@ -23,19 +29,18 @@ class TopBar extends StatelessWidget {
     final textStyle = Theme.of(context).textTheme.titleMedium;
     final scheme = Theme.of(context).colorScheme;
 
-    // Wrap evita quebra/overflow em telas pequenas: os itens “pulam” para a linha de baixo
     return Wrap(
       spacing: 8,
       runSpacing: 8,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        // Restart sempre com largura flexível
+        // Restart com largura flexível
         ConstrainedBox(
           constraints: const BoxConstraints(minWidth: 140, maxWidth: 260),
           child: FilledButton(onPressed: onRestart, style: FilledButton.styleFrom(backgroundColor: primary), child: const Text('Restart')),
         ),
 
-        // Score compacto (chip)
+        // Score
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
@@ -46,7 +51,19 @@ class TopBar extends StatelessWidget {
           child: Text('Score: $score', style: textStyle),
         ),
 
-        // Botões ícone agrupados (ocupam pouco espaço)
+        // Chip de Caos (só aparece quando ativo)
+        if (chaosLabel != null && chaosMovesLeft != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: scheme.tertiaryContainer,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: scheme.outlineVariant),
+            ),
+            child: Text('Caos: $chaosLabel ($chaosMovesLeft)', style: textStyle?.copyWith(fontWeight: FontWeight.w600)),
+          ),
+
+        // Ações compactas
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
